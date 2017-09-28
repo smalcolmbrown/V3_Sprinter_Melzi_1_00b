@@ -69,6 +69,7 @@ int FSW_Counter = 0; //rp3d.com Front Switch Counter
 int FSW_status = 1; //rp3d.com Front Switch Status
 
 
+
 //Printer status variables
 int status = STATUS_OK; //
 int error_code = ERROR_CODE_NO_ERROR; //0=Nothing, 1=Heater thermistor error
@@ -2152,16 +2153,19 @@ void manage_heater()
   #ifdef MINTEMP
     if(current_raw <= minttemp)
     {
-        status = STATUS_ERROR;
-        error_code = ERROR_CODE_HOTEND_TEMPERATURE;
-        target_raw = 0;
-        BBB();
+      status = STATUS_ERROR;
+      error_code = ERROR_CODE_HOTEND_TEMPERATURE;
+      target_raw = 0;
+      BBB();
     }
   #endif
   #ifdef MAXTEMP
-    if(current_raw >= maxttemp) {
-        target_raw = 0;
-        BBB();
+    if(current_raw >= maxttemp)
+    {
+      status = STATUS_ERROR;
+      error_code = ERROR_CODE_HOTEND_TEMPERATURE_HIGH;
+      target_raw = 0;
+      BBB();
     }
   #endif
   #if (TEMP_0_PIN > -1) || defined (HEATER_USES_MAX6675) || defined (HEATER_USES_AD595)
@@ -2233,14 +2237,19 @@ void manage_heater()
     #ifdef MINTEMP
       if(current_bed_raw <= minttemp)
       {
-          target_bed_raw = 0;
-          BBB();
+        status = STATUS_ERROR;
+        error_code = ERROR_CODE_BED_TEMPERATURE;
+        target_bed_raw = 0;
+        BBB();
       }
     #endif
     #ifdef MAXTEMPBED
-      if(current_bed_raw >= maxbtemp) {
-          target_bed_raw = 0;
-          BBB();
+      if(current_bed_raw >= maxbtemp)
+      {
+        status = STATUS_ERROR;
+        error_code = ERROR_CODE_BED_TEMPERATURE_HIGH;
+        target_bed_raw = 0;
+        BBB();
       }
     #endif
 
@@ -2432,49 +2441,148 @@ void log_ulong_array(char* message, unsigned long value[], int array_lenght) {
 }
 #endif
 
+//////////////////////////////////////////////////////////////////////////
+//
+// ErrorBleepCodes() 
+//
+// If this is called then we are in trouble. 
+// There are 4 error codes:
+// HOTEND low temperture  - 1 Long beep followed by 1 short beep
+// BED low temperture     - 1 long beep followed by 2 short beeps
+// HOTEND high temperture - 1 long beep followed by 3 short beeps
+// BED high temperture    - 1 long beep followed by 4 short beeps
+// Suusi M-M 2017/08/01
+//
+//////////////////////////////////////////////////////////////////////////
+
+void ErrorBleepCodes(){
+  
+  V3_I2C_Command( V3_LONG_BEEP, false ) ;                         // beep long
+  delay(2000);
+  
+  for (int i = 1 ; i <= error_code ; i++) {
+    V3_I2C_Command( V3_SHORT_BEEP, false ) ;                      // beep short x1
+    delay(1000);                                                  // 1 second delay
+  }
+  
+#ifdef LCD_SUPPORTED
+  StatusScreen();                                                 // display X Y Z and error on LCD
+#endif
+  
+  SerialMgr.cur()->print("EC:");                                  // Now send error code and error string to the terminal
+  SerialMgr.cur()->print(error_code);
+  SerialMgr.cur()->print(", ");
+  SerialMgr.cur()->println(error_code_str[error_code]);
+  
+  delay(2000);                                                    // delay 2 seconds
+}
+
+//////////////////////////////////////////////////////////////////////////
+//
+// BBB() 
+// 
+// switches everything off and loops forever
+// new with the firmware update 2017/04/01
+//
+//////////////////////////////////////////////////////////////////////////
+
 void BBB(){
   // BBB short beep x3 chris 2017-04-01
+  // sorry chris i dont think so the code you used was for 1 short beep
+  // but in practice it was 1 continus beep due to the ininte loop
+                                                              
+  V3_I2C_Command( V3_NOZZLE_RED_FLASH, false ) ;                  // nozzle RGB LED Red Flashing
+  V3_I2C_Command( V3_BUTTON_RED_FLASH, false ) ;                  // button RGB LED Red Flashing
   while(1){
+                                                                  // loop forever
     pinMode(HEATER_0_PIN, OUTPUT);
     pinMode(HEATER_1_PIN, OUTPUT);
-    target_bed_raw = 0; target_raw = 0;//stop hotend heater, bed
-    digitalWrite(HEATER_0_PIN,LOW);digitalWrite(HEATER_1_PIN,LOW);//stop hotend heater, bed
-    Wire.beginTransmission(0x48);
-    Wire.send(239);
-    Wire.endTransmission();
-    disable_x(); disable_y(); disable_z(); disable_e();//stop motors
-    analogWrite(FAN_PIN, 0); WRITE(FAN_PIN, LOW);//stop fan
-    // SerialMgr.cur()->println("BBB, Temperature Sensor Error.");
+    target_bed_raw = 0;                                           // stop bed heater
+    target_raw = 0;                                               // stop hotend heater
+    digitalWrite(HEATER_0_PIN,LOW);                               // stop hotend heater
+    digitalWrite(HEATER_1_PIN,LOW);                               // stop bed heater 
+    
+//    V3_I2C_Command( V3_SHORT_BEEP, false ) ;                      // beep short x1
+    ErrorBleepCodes();                                            // give an audiabe clue to the error
+    
+    disable_x(); disable_y(); disable_z(); disable_e();           //stop motors
+    analogWrite(FAN_PIN, 0);                                      //stop fan
+    WRITE(FAN_PIN, LOW); 
   }
 }
 
-void check_heater(){
-  //nozzle
+//////////////////////////////////////////////////////////////////////////
+//
+// check_heater() 
+//
+// Check the Extruder and Bed are within safe limits
+//
+// calls  BBB() if there is an error
+//
+// new with the firmware update 2017/04/01
+//
+//////////////////////////////////////////////////////////////////////////
+
+void check_heater()
+{
+  // check the nozzle temparatue is within safe limits
   current_raw = analogRead(TEMP_0_PIN);
-  current_raw = 1023 - current_raw;   // NTC
+  current_raw = 1023 - current_raw;                               // NTC
   if(current_raw <= minttemp)
   {
+    // Temperature below MINTEMP 
     status = STATUS_ERROR;
     error_code = ERROR_CODE_HOTEND_TEMPERATURE;
-    target_raw = 0;
-    BBB();
+    target_raw = 0;                                               // switch off the Extruder target
+    BBB();                                                        // call the error handler
   }
-  if(current_raw >= maxttemp) {
-    target_raw = 0;
-    BBB();
-  }
-
-  //bed
-  current_bed_raw = analogRead(TEMP_1_PIN);
-  current_bed_raw = 1023 - current_bed_raw;   // NTC
-  if(current_bed_raw <= minttemp)
+  if(current_raw >= maxttemp) 
   {
-    target_bed_raw = 0;
-    BBB();
-  }
-  if(current_bed_raw >= maxbtemp) {
-    target_bed_raw = 0;
-    BBB();
+    // Temperature above MAXTEMP 
+    status = STATUS_ERROR;
+    error_code = ERROR_CODE_HOTEND_TEMPERATURE_HIGH;
+    target_raw = 0;                                               // switch off the Extruder target
+    BBB();                                                        // call the error handler
   }
 
+  // check the bed temparature is within the safe limits
+  current_bed_raw = analogRead(TEMP_1_PIN);
+  current_bed_raw = 1023 - current_bed_raw;                       // NTC
+  if(current_bed_raw <= minttemp) 
+  {
+    // bed temperature below MINTEMP
+    status = STATUS_ERROR;
+    error_code = ERROR_CODE_BED_TEMPERATURE;
+    target_bed_raw = 0;                                           // switch off the Extruder target
+    BBB();
+  }
+  if(current_bed_raw >= maxbtemp) 
+  {
+    // bed temparature above MAXTEMPBED
+    status = STATUS_ERROR;
+    error_code = ERROR_CODE_BED_TEMPERATURE_HIGH;
+    target_bed_raw = 0;                                           // switch off the Extruder target
+    BBB();
+  }
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// void V3_I2C_Command ( int iCommand, boolean bEchoCommand )
+//
+// 
+//
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void V3_I2C_Command ( int iCommand, boolean bEchoCommand )
+{
+  char szChar[10];                            // workspace for echo string
+  Wire.beginTransmission( V3_I2C_DEVICE );    // open comms with V3 I2C device
+  Wire.send(iCommand);                        // Send command
+  Wire.endTransmission();                     // end transmission
+  if( bEchoCommand ) {
+    sprintf( szChar, "M%d OK", iCommand );    // create echo string
+    SerialMgr.cur()->println(szChar);         // echo result to serial manager
+  }
+}
+
