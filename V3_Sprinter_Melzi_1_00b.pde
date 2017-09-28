@@ -1,6 +1,8 @@
 // Tonokip RepRap firmware rewrite based off of Hydra-mmm firmware.
 // Licence: GPL
 // last update date: 2017-4-26
+// Additions and bug fixes by Suusi Malcolm-Brown 
+// https://github.com/smalcolmbrown/V3_Sprinter_Melzi_1_00b/
 
 #include "fastio.h"
 //#include "Configuration.h"
